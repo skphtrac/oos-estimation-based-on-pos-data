@@ -1,21 +1,12 @@
 import datetime
-from scipy.interpolate import CubicSpline
-import numpy as np
-from numpy import cov
-import matplotlib.pyplot as plt
 import random
-from scipy.stats import norm, gaussian_kde, expon, poisson
-from scipy.special import ndtr
-import statistics
-import math
-from sklearn.neighbors import KernelDensity
-import collections
+import matplotlib.pyplot as plt
+import numpy as np
 from scipy.interpolate import CubicSpline
-import seaborn as sns
-import scipy.optimize
-import math
+from scipy.stats import gaussian_kde
+from scipylearn.neighbors import KernelDensity
 
-from sim import Store
+from store_framework import Store
 from occupancy import Occupancy
 
 
@@ -34,6 +25,7 @@ class TimeSimulation():
 
     def simulate_period(self, start, end):
 
+        # Time Simulation
         self.startdate = self.current_time = self.last_time_step = start
         self.enddate = end
         self.scheduled_pos_data = {}
@@ -46,18 +38,16 @@ class TimeSimulation():
         # OOS
         self.ean_pos = {}
         self.last_ean_index = 0
-        self.oos_result = []
-        self.oos_check = {'TP': 0, 'aTP': 0, 'FP': 0, 'FN': 0, 'TN': 0}
-        self.tp, self.atp, self.fp, self.fn, self.tn = [], [], [], [], []
-
         self.pos_time_deltas = []
         self.purchase_delta = 0
         self.last_searched_index = 0
-        self.oos_corr = []
-        self.thresh_count = [0, 0]
         self.pos_length = 0
         self.pdf = 0
         self.mult = 0
+
+        # OOS evalution
+        self.oos_check = {'TP': 0, 'FP': 0, 'FN': 0, 'TN': 0}
+        self.tp, self.fp, self.fn, self.tn = [], [], [], []
 
         while self.current_time <= self.enddate:
 
@@ -71,7 +61,6 @@ class TimeSimulation():
                     self.time_action()
 
                 elif self.current_time.weekday() != self.last_time_step.weekday() and self.current_time.weekday() in {1, 4}:
-
                     self.new_day_action()
                 else:
                     time_step = datetime.timedelta(minutes=1)
@@ -83,6 +72,7 @@ class TimeSimulation():
             self.current_time += time_step
 
     def time_action(self):
+        # called each timestep within stores opening times
 
         self.coc = self.current_occupancy(self.current_time)
 
@@ -96,21 +86,28 @@ class TimeSimulation():
                           + ' is OOS at ' + str(self.current_time))
 
             if len(self.pos_data) > 2:
+                # calculates the time between pos entries
                 self.calculate_purchase_delta(shelf.product.ean)
-                self.check_if_oos2(shelf)
+
+                # checks whether product could be OOS
+                self.check_if_oos(shelf)
 
         self.process_sheduled_pos(self.current_time)
         self.check_pos_for_entry(self.current_time)
 
     def simulate_shelf_demand(self, shelf):
+        # using store occupancy and product
 
         self.product_graph.append([
             self.current_time, shelf.current_stock])
 
         if random.random() > self.coc * shelf.product.popularity:
+            # uses current store occupancy and product popularity to decide
+            # whether product is taken out of shelf
+
             return
 
-        amount = random.randint(1, 2)
+        amount = random.randint(1, 2)  # amount of products taken out of shelf
         if amount > shelf.current_stock:
             amount = shelf.current_stock
 
@@ -119,11 +116,14 @@ class TimeSimulation():
         self.shelf_data_times.append(
             [self.current_time, shelf.current_stock])
 
-        if random.random() < 0.02:  # shrinkage
+        if random.random() < 0.02:  # shrinkage -> will not trigger pos entry
             return
 
         for i in range(amount):
-            if random.random() < 0.01:  # product left and retrieved later
+            # takes into account whether product is left during
+            # shopping and is retrieved at some point later
+
+            if random.random() < 0.01:
 
                 delay = random.randint(0, self.time_til_closing())
                 purchase_time = self.current_time + \
@@ -135,6 +135,8 @@ class TimeSimulation():
                 amount -= 1
 
         if amount > 0:
+            # generates time stamps for when product will be bought
+
             max_shopping_time = 35
             ttc = self.time_til_closing()
 
@@ -142,22 +144,23 @@ class TimeSimulation():
                 max_shopping_time = ttc
 
             delay = random.randint(0, max_shopping_time)
+
             purchase_time = self.current_time + \
                 datetime.timedelta(minutes=delay)
             purchase_time = datetime.datetime.combine(
                 self.current_time.date(), purchase_time.time())
-            # print(str(self.current_time) + ' + '
-            #       + str(delay) + ' ' + str(purchase_time))
+
             self.schedule_pos_entry(
                                     purchase_time,
                                     shelf.product,
                                     amount)
 
     def process_sheduled_pos(self, time):
+        # checks whether purchases are scheduled for current time to
+        # create point-of-sale entries
 
         if time in self.scheduled_pos_data:
             max = random.randint(1, 2)
-            # for value in self.scheduled_pos_data.get(self.current_time):
             i = 0
             for value in self.scheduled_pos_data[time]:
 
@@ -169,7 +172,7 @@ class TimeSimulation():
                             time
                         )
                     )
-                else:
+                else:  # delays purchases by one minute
                     purchase_time = time + \
                         datetime.timedelta(minutes=1)
                     self.schedule_pos_entry(
@@ -179,6 +182,9 @@ class TimeSimulation():
                 i += 1
 
     def check_pos_for_entry(self, time):
+        # to calculate the time between pos entries it is checked whether
+        # there are pos entries at the current time step and the time since
+        # the last entry is added to the list of all purchase deltas
 
         for i, entry in enumerate(self.pos_data[self.last_searched_index:], self.last_searched_index):
             if time == entry.purchase_time:
@@ -243,9 +249,14 @@ class TimeSimulation():
             self.ean_pos[ean]['lepi'] = i+1
 
     def check_if_oos(self, shelf):
-        ean = shelf.product.ean
+        # calculates time since last PoS entry for a product, then creates a
+        # kernel density function based on all previous purchase time deltas
+        # to calculate how probable the calculates time since the last PoS entry
+        # is compared to previous entries
 
+        ean = shelf.product.ean
         curr_day = self.current_time.weekday()
+
         # calculate time since last purchase for given product
         if curr_day == self.ean_pos[ean]['pos'][-1].purchase_time.weekday():
             time_since_last_purchase = self.current_time - \
@@ -260,102 +271,18 @@ class TimeSimulation():
         time_since_last_purchase = int(time_since_last_purchase.hour*60
                                        + time_since_last_purchase.minute)
 
-        # fp = self.fit_to_expon(list(self.ean_pos[ean]['deltas'].values(
-        # )), time_since_last_purchase)/self.ean_pos[ean]['deltas'][0]
-        #
-        # fp = 1-fp
-
-        # if time_since_last_purchase in self.ean_pos[ean]['deltas']:
-        #     fp = 1 - \
-        #         (self.ean_pos[ean]['deltas'][time_since_last_purchase]
-        #          / self.ean_pos[ean]['deltas'][0])
-        # time_since_last_purchase += 10
-        if time_since_last_purchase in self.ean_pos[ean]['deltas']:
-            if self.ean_pos[ean]['deltas'][time_since_last_purchase] < 2:
-                fp = 1
-            else:
-                fp = 1 - \
-                    (self.ean_pos[ean]['deltas'][time_since_last_purchase]
-                     / self.ean_pos[ean]['deltas'][0])
-            # fp = 0
-            # if self.ean_pos[ean]['deltas'][time_since_last_purchase] <= 1:
-            #     fp = 1
-            # else:
-            #     fp = 0
-        else:
-            fp = 1
-
-        upper_threshold = .98
-        lower_threshold = .55
-
-        # fdfm = self.less_pos_than_mean(self.ean_pos[ean]['pos'])
-        # curr, mean = self.less_pos_than_mean(self.ean_pos[ean]['pos'])
-
-        if fp > upper_threshold:
-            self.oos_result.append(True)
-        elif fp < lower_threshold:
-            self.oos_result.append(False)
-
-        if len(self.oos_result) > 4:
-            for i, result in enumerate(self.oos_result[:-5], 4):
-                if (self.oos_result[i] == self.oos_result[i-1] == self.oos_result[i-2] == self.oos_result[i-3] == self.oos_result[i-4]) is True:
-                    print(shelf.current_stock)
-
-        if fp >= upper_threshold:
-            self.oos_result.append(True)
-            if shelf.current_stock == 0 or shelf.current_stock/shelf.capacity < .2:
-                self.oos_check['TP'] += 1  # 0.784
-                self.tp.append(fp)
-
-            elif shelf.current_stock > 0:
-                self.oos_check['FP'] += 1  # 0.55
-                self.fp.append(fp)
-
-        elif fp < lower_threshold:
-            self.oos_result.append(False)
-            if shelf.current_stock == 0:
-                self.oos_check['FN'] += 1  # 0.752
-                self.fn.append(fp)
-
-            elif shelf.current_stock > 0:
-                self.oos_check['TN'] += 1  # 0.537
-                self.tn.append(fp)
-
-    def check_if_oos2(self, shelf):
-        ean = shelf.product.ean
-
-        curr_day = self.current_time.weekday()
-        # calculate time since last purchase for given product
-        if curr_day == self.ean_pos[ean]['pos'][-1].purchase_time.weekday():
-            time_since_last_purchase = self.current_time - \
-                self.ean_pos[ean]['pos'][-1].purchase_time
-        else:
-            opening_time = datetime.datetime.combine(
-                self.current_time.date(), self.store.opening_time)
-            time_since_last_purchase = self.current_time - opening_time
-
-        time_since_last_purchase = (
-            datetime.datetime.min + time_since_last_purchase).time()
-        time_since_last_purchase = int(time_since_last_purchase.hour*60
-                                       + time_since_last_purchase.minute)
-
+        # creates kernel density function based on all previous purchase deltas
         if self.pos_length != len(s.pos_time_deltas):
             self.pdf = gaussian_kde(s.pos_time_deltas)
             self.pos_length = len(s.pos_time_deltas)
             self.mult = self.pdf.integrate_box_1d(0, 1000)
 
+        # calculates probability of time since last PoS entry in relation to
+        # all previous purchase deltas
         oos_prob = self.pdf.integrate_box_1d(0, time_since_last_purchase)
         oos_prob = oos_prob * (1/self.mult)
 
-        upper_threshold = .8
-
-        if oos_prob >= upper_threshold:
-            self.thresh_count[0] += 1
-        else:
-            self.thresh_count[1] += 1
-
-        # if oos_prob > upper_threshold:
-        #     self.oos_result.append(True)
+        # evaluates relation of the OOS probability and current shelf stock
         if shelf.current_stock == 0:
             self.oos_check['TP'] += 1  # 0.784
             self.tp.append(oos_prob)
@@ -364,7 +291,19 @@ class TimeSimulation():
             self.oos_check['FP'] += 1  # 0.55
             self.fp.append(oos_prob)
 
-        # elif oos_prob < upper_threshold:
+        # threshold = .8  # threshold for triggering OOS detection
+        #
+        # if oos_prob > threshold:
+        #     self.oos_result.append(True)
+        #     if shelf.current_stock == 0:
+        #         self.oos_check['TP'] += 1  # 0.784
+        #         self.tp.append(oos_prob)
+        #
+        #     elif shelf.current_stock > 0:
+        #         self.oos_check['FP'] += 1  # 0.55
+        #         self.fp.append(oos_prob)
+        #
+        # elif oos_prob < threshold:
         #     self.oos_result.append(False)
         #     if shelf.current_stock == 0:
         #         self.oos_check['FN'] += 1  # 0.752
@@ -414,33 +353,14 @@ class TimeSimulation():
                 counter = 1
         return np.mean(day_sales)
 
-    def monoExp(self, x, m, t, b):
-        return m * np.exp(-t * x) + b
-
-    def fit_to_expon(self, data, point):
-
-        xs = np.arange(len(data))
-        ys = np.array(data)
-
-        # perform the fit
-        p0 = (2000, .1, 50)  # start with values near those we expect
-        params, cv = scipy.optimize.curve_fit(self.monoExp, xs, ys, p0)
-        m, t, b = params
-        sampleRate = 20_000  # Hz
-        tauSec = (1 / t) / sampleRate
-
-        # determine quality of the fit
-        squaredDiffs = np.square(ys - self.monoExp(xs, m, t, b))
-        squaredDiffsFromMean = np.square(ys - np.mean(ys))
-        rSquared = 1 - np.sum(squaredDiffs) / np.sum(squaredDiffsFromMean)
-
-        return self.monoExp(point, m, t, b)
-
     def new_day_action(self):
+        # called in the beginning of a new day on specified days
+
         self.store.restock_shelfs()
 
     def current_occupancy(self, time):
-        return self.store_occupancy[time.weekday()](self.time_to_float(time))
+        coc = self.store_occupancy[time.weekday()](self.time_to_float(time))
+        return coc
 
     def schedule_pos_entry(self, time, product, amt):
 
@@ -450,6 +370,9 @@ class TimeSimulation():
             self.scheduled_pos_data[time].append([product, amt])
 
     def create_occupancy(self):
+        # interpolates between the given occupancy data for each hour
+        # on a day to create a interpolation function which returns the
+        # occupancy in the store at the given time
 
         for day in self.store.occupancy:
 
@@ -464,16 +387,15 @@ class TimeSimulation():
             self.store_occupancy.append(CubicSpline(x, y))
 
     def time_til_closing(self):
+        # calculates the time between the current time step and
+        # the closing time of a store
+
         closing_time = datetime.datetime.combine(
             self.current_time.date(), self.store.closing_time)
         ttc = closing_time - self.current_time
         ttc = (datetime.datetime.min + ttc).time()
         ttc = ttc.hour*60 + ttc.minute + ttc.second / 60
         return round(ttc)
-
-    def float_to_time(self, f):
-        str = '{0:02.0f}:{1:02.0f}'.format(*divmod(f * 60, 60))
-        return datetime.strptime(str, '%H:%M')
 
     def time_to_float(self, t):
         return t.hour + (t.minute + t.second / 60) / 60
@@ -512,25 +434,18 @@ if __name__ == '__main__':
         for k in s.oos_check:
             print(str(k) + ': ' + str(s.oos_check[k]/sum))
 
-        print(
-            'T: ' + str((s.oos_check['TP'] + s.oos_check['TN'] + s.oos_check['aTP'])/sum))
-        print('F: ' + str(s.oos_check['FP']/sum + s.oos_check['FN']/sum))
-        # a = np.array(s.tp)
-        # print(statistics.mode(a))
+        print('T: ' + str((s.oos_check['TP'] + s.oos_check['TN'])/sum))
+        print('F: ' + str((s.oos_check['FP'] + s.oos_check['FN'])/sum))
         print('TP: ' + str(np.mean(s.tp)))
-        # print('aTP: ' + str(np.mean(s.atp)))
         print('FP: ' + str(np.mean(s.fp)))
-        # print('FN: ' + str(np.mean(s.fn)))
-        # print('TN: ' + str(np.mean(s.tn)))
+        print('FN: ' + str(np.mean(s.fn)))
+        print('TN: ' + str(np.mean(s.tn)))
 
         plt.hist(s.tp, color='limegreen', bins=100, alpha=.5)
-        # plt.show()
         plt.hist(s.fp, color='firebrick', bins=100, alpha=.5)
+        plt.hist(s.fn, color='lightcoral', bins=100, alpha=.5)
+        plt.hist(s.tn, color='seagreen', bins=100, alpha=.5)
         plt.show()
-        # plt.hist(s.fn, color='lightcoral', bins=100, alpha=.5)
-        # # plt.show()
-        # plt.hist(s.tn, color='seagreen', bins=100, alpha=.5)
-        # plt.show()
 
     def kde_to_data_comparison(data):
         x = np.array(data).reshape(-1, 1)
@@ -547,82 +462,11 @@ if __name__ == '__main__':
         plt.fill_between(k, fppdf(k), color='firebrick', alpha=.5)
         plt.plot(k, tppdf(k), color='limegreen')
         plt.fill_between(k, tppdf(k), color='limegreen', alpha=.5)
-        plt.show()
 
     # show_true_false_results()
-    kde_purchase_delta_prob_to_current_stock()
+    # kde_purchase_delta_prob_to_current_stock()
     # kde_to_data_comparison(s.tp)
     # kde_to_data_comparison(s.fp)
     # kde_to_data_comparison(s.pos_time_deltas)
 
-    # plt.hist(s.tp, color='limegreen', bins=100, alpha=.5)
-    # plt.hist(s.fp, color='firebrick', bins=100, alpha=.5)
-
     plt.show()
-
-    #
-    #
-    #
-    #
-    #
-    #
-    #
-    #
-    #
-    #
-    #
-    #
-    #
-    #
-    # x, y = [], []
-    # for k in s.ean_pos[1111111111111]['deltas'].keys():
-    #     x.append(k)
-    #     y.append(s.ean_pos[1111111111111]['deltas'][k])
-    #
-    # # p = y[0]
-    # # for i, v in enumerate(y):
-    # #     y[i] = y[i]/p
-    # # print(y)
-    # #
-    # xs = np.arange(len(y))
-    # ys = np.array(y)
-    #
-    # def monoExp(x, m, t, b):
-    #     return m * np.exp(-t * x) + b
-    #
-    # # perform the fit
-    # p0 = (2000, .1, 50)  # start with values near those we expect
-    # params, cv = scipy.optimize.curve_fit(monoExp, xs, ys, p0)
-    # m, t, b = params
-    # sampleRate = 20_000  # Hz
-    # tauSec = (1 / t) / sampleRate
-    #
-    # # determine quality of the fit
-    # squaredDiffs = np.square(ys - monoExp(xs, m, t, b))
-    # squaredDiffsFromMean = np.square(ys - np.mean(ys))
-    # rSquared = 1 - np.sum(squaredDiffs) / np.sum(squaredDiffsFromMean)
-    # print(f"R² = {rSquared}")
-    #
-    # # plot the results
-    # plt.plot(xs, ys, '.', label="data")
-    # plt.plot(xs, monoExp(xs, m, t, b), '--', label="fitted")
-    # plt.title("Fitted Exponential Curve")
-    #
-    # # inspect the parameters
-    # print(f"Y = {m} * e^(-{t} * x) + {b}")
-    # print(f"Tau = {tauSec * 1e6} µs")
-    #
-    # def expo(x):
-    #     return m * math.exp((-t) * x) + b
-    #
-    # print(expo(100))
-    # print(s.ean_pos[1111111111111]['deltas'][100])
-
-    # xs2 = np.arange(25)
-    # ys2 = monoExp(xs2, m, t, b)
-    #
-    # plt.plot(xs, ys, '.', label="data")
-    # plt.plot(xs2, ys2, '--', label="fitted")
-    # plt.title("Extrapolated Exponential Curve")
-
-    # plt.show()
