@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.interpolate import CubicSpline
 from scipy.stats import gaussian_kde
-from scipylearn.neighbors import KernelDensity
+from sklearn.neighbors import KernelDensity
 
 from store_framework import Store
 from occupancy import Occupancy
