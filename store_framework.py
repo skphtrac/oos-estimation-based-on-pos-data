@@ -1,3 +1,5 @@
+import random
+
 
 class Store():
 
@@ -13,7 +15,8 @@ class Store():
 
     def create_shelfs(self):
         for _ in range(1):
-            self.shelfs.append(Shelf(_, 20, Product(False)))
+            cap = random.randint(5, 50)
+            self.shelfs.append(Shelf(_, cap, Product()))
 
     def restock_shelfs(self):
 
@@ -33,10 +36,16 @@ class Shelf():
 
 class Product():
 
-    def __init__(self, on_promotion):
+    def __init__(self):
 
-        self.ean = 1111111111111
+        self.ean = self.generate_ean()
         self.name = 'Apple'
-        self.on_promotion = on_promotion
-        self.popularity = .01
-        self.seasonality = 0
+        self.popularity = self.generate_popularity()
+
+    def generate_ean(self):
+        ean = 1234500000000 + random.randint(0, 99999999)
+        return ean
+
+    def generate_popularity(self):
+        pop = random.uniform(.005, .15)
+        return pop

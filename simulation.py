@@ -65,8 +65,8 @@ class TimeSimulation():
                 else:
                     time_step = datetime.timedelta(minutes=1)
 
-            self.shelf_data.append([
-                self.current_time, self.store.shelfs[0].current_stock])
+                self.shelf_data.append([
+                    self.current_time, self.store.shelfs[0].current_stock])
 
             self.last_time_step = self.current_time
             self.current_time += time_step
@@ -85,12 +85,11 @@ class TimeSimulation():
                     print(str(shelf.product.name)
                           + ' is OOS at ' + str(self.current_time))
 
-            if len(self.pos_data) > 2:
-                # calculates the time between pos entries
-                self.calculate_purchase_delta(shelf.product.ean)
+            # calculates the time between pos entries
+            self.calculate_purchase_delta(shelf.product.ean)
 
-                # checks whether product could be OOS
-                self.check_if_oos(shelf)
+            # checks whether product could be OOS
+            self.check_if_oos(shelf)
 
         self.process_sheduled_pos(self.current_time)
         self.check_pos_for_entry(self.current_time)
@@ -204,9 +203,10 @@ class TimeSimulation():
 
             self.ean_pos[ean] = {
                 'pos': [],      # ean's pos entries
-                'deltas': {},     # frequency of ean's purchase time deltas
+                'deltas': [],   # frequency of ean's purchase time deltas
                 'lpi': 0,       # last used index of latest pos_data iteration
-                'lepi': 0       # last used index of latest ean_pos iteration
+                'lepi': 0,       # last used index of latest ean_pos iteration
+                'curr_delta': -1
             }
 
         start_i = self.ean_pos[ean]['lpi']
@@ -217,36 +217,52 @@ class TimeSimulation():
                 self.ean_pos[ean]['pos'].append(entry)
                 self.ean_pos[ean]['lpi'] = i+1
 
-        start_i = self.ean_pos[ean]['lepi']
+        last_i = self.ean_pos[ean]['lepi']
 
+        for i, entry in enumerate(self.ean_pos[ean]['pos'][last_i:], last_i):
+
+            if (self.current_time - datetime.timedelta(minutes=1)) == entry.purchase_time:
+                self.ean_pos[ean]['deltas'].append(
+                    self.ean_pos[ean]['curr_delta'])
+                self.ean_pos[ean]['curr_delta'] = 0
+            self.ean_pos[ean]['lepi'] = i
+        self.ean_pos[ean]['curr_delta'] += 1
+
+        if self.current_time.time() == self.store.closing_time:
+            self.ean_pos[ean]['deltas'].append(
+                self.ean_pos[ean]['curr_delta'])
+            self.ean_pos[ean]['curr_delta'] = 0
+
+        # start_i = self.ean_pos[ean]['lpi']
+        #
         # create dict of minute frequencey of ean's purchase time delta
-        for i, pos in enumerate(self.ean_pos[ean]['pos'][start_i:-1], start_i):
-            current, next = pos, self.ean_pos[ean]['pos'][i+1]
-
-            pos_day = current.purchase_time.weekday()
-            if next.purchase_time.weekday() == pos_day:
-
-                purchase_delta = next.purchase_time - current.purchase_time
-                purchase_delta = (datetime.datetime.min
-                                  + purchase_delta).time()
-                purchase_delta = int(purchase_delta.hour*60
-                                     + purchase_delta.minute
-                                     + purchase_delta.second / 60)
-
-                if purchase_delta > 0:
-                    for t in range(0, purchase_delta):
-                        if t not in self.ean_pos[ean]['deltas']:
-                            self.ean_pos[ean]['deltas'][t] = 1
-                        else:
-                            self.ean_pos[ean]['deltas'][t] += 1
-                elif purchase_delta == 0:
-                    t = 0
-                    if t not in self.ean_pos[ean]['deltas']:
-                        self.ean_pos[ean]['deltas'][t] = 1
-                    else:
-                        self.ean_pos[ean]['deltas'][t] += 1
-
-            self.ean_pos[ean]['lepi'] = i+1
+        # for i, pos in enumerate(self.ean_pos[ean]['pos'][start_i:-1], start_i):
+        #     current, next = pos, self.ean_pos[ean]['pos'][i+1]
+        #
+        #     pos_day = current.purchase_time.weekday()
+        #     if next.purchase_time.weekday() == pos_day:
+        #
+        #         purchase_delta = next.purchase_time - current.purchase_time
+        #         purchase_delta = (datetime.datetime.min
+        #                           + purchase_delta).time()
+        #         purchase_delta = int(purchase_delta.hour*60
+        #                              + purchase_delta.minute
+        #                              + purchase_delta.second / 60)
+        #
+        #         if purchase_delta > 0:
+        #             for t in range(0, purchase_delta):
+        #                 if t not in self.ean_pos[ean]['deltas']:
+        #                     self.ean_pos[ean]['deltas'][t] = 1
+        #                 else:
+        #                     self.ean_pos[ean]['deltas'][t] += 1
+        #         elif purchase_delta == 0:
+        #             t = 0
+        #             if t not in self.ean_pos[ean]['deltas']:
+        #                 self.ean_pos[ean]['deltas'][t] = 1
+        #             else:
+        #                 self.ean_pos[ean]['deltas'][t] += 1
+        #
+        #     self.ean_pos[ean]['lepi'] = i+1
 
     def check_if_oos(self, shelf):
         # calculates time since last PoS entry for a product, then creates a
@@ -255,6 +271,10 @@ class TimeSimulation():
         # is compared to previous entries
 
         ean = shelf.product.ean
+
+        if ean not in self.ean_pos or len(self.ean_pos[ean]['pos']) < 20:
+            return
+
         curr_day = self.current_time.weekday()
 
         # calculate time since last purchase for given product
@@ -291,10 +311,10 @@ class TimeSimulation():
             self.oos_check['FP'] += 1  # 0.55
             self.fp.append(oos_prob)
 
-        # threshold = .8  # threshold for triggering OOS detection
+        # threshold = .51  # threshold for triggering OOS detection
         #
         # if oos_prob > threshold:
-        #     self.oos_result.append(True)
+        #     # self.oos_result.append(True)
         #     if shelf.current_stock == 0:
         #         self.oos_check['TP'] += 1  # 0.784
         #         self.tp.append(oos_prob)
@@ -304,7 +324,7 @@ class TimeSimulation():
         #         self.fp.append(oos_prob)
         #
         # elif oos_prob < threshold:
-        #     self.oos_result.append(False)
+        #     # self.oos_result.append(False)
         #     if shelf.current_stock == 0:
         #         self.oos_check['FN'] += 1  # 0.752
         #         self.fn.append(oos_prob)
@@ -312,6 +332,25 @@ class TimeSimulation():
         #     elif shelf.current_stock > 0:
         #         self.oos_check['TN'] += 1  # 0.537
         #         self.tn.append(oos_prob)
+
+    def calculate_threshold(self):
+        threshold = 0
+        day_sales = []
+        counter = 1
+
+        for i, pos in enumerate(s.ean_pos[1111111111111]['pos'][:-1]):
+
+            current, next = pos, s.ean_pos[1111111111111]['pos'][i+1]
+
+            if current.purchase_time.weekday() == next.purchase_time.weekday():
+                counter += 1
+            else:
+                day_sales.append(counter)
+                counter = 1
+
+        mean = np.mean(day_sales)
+
+        return threshold
 
     def less_pos_than_mean(self, pos_data):
 
@@ -436,10 +475,10 @@ if __name__ == '__main__':
 
         print('T: ' + str((s.oos_check['TP'] + s.oos_check['TN'])/sum))
         print('F: ' + str((s.oos_check['FP'] + s.oos_check['FN'])/sum))
-        print('TP: ' + str(np.mean(s.tp)))
-        print('FP: ' + str(np.mean(s.fp)))
-        print('FN: ' + str(np.mean(s.fn)))
-        print('TN: ' + str(np.mean(s.tn)))
+        # print('TP: ' + str(np.mean(s.tp)))
+        # print('FP: ' + str(np.mean(s.fp)))
+        # print('FN: ' + str(np.mean(s.fn)))
+        # print('TN: ' + str(np.mean(s.tn)))
 
         plt.hist(s.tp, color='limegreen', bins=100, alpha=.5)
         plt.hist(s.fp, color='firebrick', bins=100, alpha=.5)
@@ -451,7 +490,7 @@ if __name__ == '__main__':
         x = np.array(data).reshape(-1, 1)
         kde = KernelDensity(bandwidth=.01).fit(x)
         kk = kde.sample(round(len(data)))
-        plt.hist(kk, color='firebrick', bins=100, alpha=.5)
+        # plt.hist(kk, color='firebrick', bins=100, alpha=.5)
         plt.hist(data, color='limegreen', bins=100, alpha=.5)
 
     def kde_purchase_delta_prob_to_current_stock():
@@ -468,5 +507,53 @@ if __name__ == '__main__':
     # kde_to_data_comparison(s.tp)
     # kde_to_data_comparison(s.fp)
     # kde_to_data_comparison(s.pos_time_deltas)
+    #
+    # kde_to_data_comparison(s.ean_pos[s.store.shelfs[0].product.ean]['deltas'])
 
     plt.show()
+
+    for shelf in s.store.shelfs:
+        kde_to_data_comparison(s.ean_pos[shelf.product.ean]['deltas'])
+        print(str(shelf.capacity) + ' ' + str(shelf.product.popularity))
+        plt.show()
+
+    # print(s.shelf_data)
+    #
+    x, y = [], []
+    for _ in s.shelf_data:
+        if (s.store.opening_time <= _[0].time() <= s.store.closing_time):
+            x.append(_[1])
+            y.append(_[0])
+
+    plt.plot(y, x)
+    plt.show()
+
+
+# import matplotlib.pyplot as plt
+# from scipy.interpolate import CubicSpline
+# import numpy as np
+#
+# x = [13, 13.4, 5, 8, 13, 10.9, 11.3, 11.2, 7.8, 8, 6.4, 6.9, 7.1, 5.1, 5.2, 4, 13.5]
+# y = [.185, .22, .9, .6, .19, .4, .34, .3, .54, .52, .74, .68, .65, 0.89, .81, .95, .165]
+# x.sort()
+# y.sort()
+# my_fun = CubicSpline(x, y, bc_type='natural')
+#
+# print(my_fun(5))
+# plt.scatter(y, x)
+# plt.show()
+
+# day_sales = []
+# counter = 1
+# for i, pos in enumerate(s.ean_pos[1111111111111]['pos'][:-1]):
+#
+#     current, next = pos, s.ean_pos[1111111111111]['pos'][i+1]
+#
+#     if current.purchase_time.weekday() == next.purchase_time.weekday():
+#         counter += 1
+#     else:
+#         day_sales.append(counter)
+#         counter = 1
+#
+# mean = np.mean(day_sales)
+# print(mean)
